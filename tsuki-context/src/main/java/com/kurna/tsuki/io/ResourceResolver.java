@@ -18,11 +18,11 @@ import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
-import static com.kurna.tsuki.utils.PathUtils.jarUriToPath;
-import static com.kurna.tsuki.utils.PathUtils.removeLeadingSlash;
-import static com.kurna.tsuki.utils.PathUtils.removeTrailingSlash;
-import static com.kurna.tsuki.utils.PathUtils.toSlashPath;
-import static com.kurna.tsuki.utils.PathUtils.uriToString;
+import static com.kurna.tsuki.utils.FilePathUtils.jarUriToPath;
+import static com.kurna.tsuki.utils.FilePathUtils.removeLeadingSlash;
+import static com.kurna.tsuki.utils.FilePathUtils.removeTrailingSlash;
+import static com.kurna.tsuki.utils.FilePathUtils.toSlashPath;
+import static com.kurna.tsuki.utils.FilePathUtils.uriToString;
 
 /**
  * 按基础包路径扫描类路径中的资源，并将扫描到的文件封装为 {@link Resource} 后交给调用方处理。

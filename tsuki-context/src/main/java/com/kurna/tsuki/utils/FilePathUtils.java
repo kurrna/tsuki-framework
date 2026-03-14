@@ -8,19 +8,14 @@ import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.util.Map;
 
-public abstract class PathUtils {
-
-    public PathUtils() {
-    }
+public abstract class FilePathUtils {
 
     /**
-     * 将指向 Jar 资源的 URI 转换为可遍历的 {@link Path}。
-     * <p>
-     * 该方法会基于 Jar URI 创建一个文件系统视图，然后定位到基础包对应的目录，以便后续像遍历普通目录一样遍历 Jar 内部资源。
+     * 将指向 Jar 资源的 URI 转换为可遍历的 {@link Path}
      *
-     * @param basePackagePath 基础包对应的路径形式
-     * @param jarUri          指向 Jar 包内部资源的 URI
-     * @return Jar 文件系统中基础包目录对应的路径
+     * @param basePackagePath 基础包对应的路径形式，例如 {@code com/kurna/tsuki}
+     * @param jarUri          指向 Jar 包内部资源的 URI，格式如 {@code jar:file:/path/to/foo.jar!/}
+     * @return Jar 文件系统中基础包目录对应的 {@link Path}
      * @throws IOException 创建 Jar 文件系统或解析路径时发生 I/O 异常
      */
     public static Path jarUriToPath(String basePackagePath, URI jarUri) throws IOException {
@@ -38,20 +33,24 @@ public abstract class PathUtils {
     }
 
     /**
-     * 将系统相关的路径分隔符统一为 {@code /}，便于跨平台比较和断言。
+     * 将系统相关的路径分隔符统一转换为正斜线 {@code /}
      *
-     * @param pathText 原始路径文本
-     * @return 统一分隔符后的路径文本
+     * @param pathText 原始路径文本（可能含有 {@code \} 分隔符）
+     * @return 将所有 {@code \} 替换为 {@code /} 后的路径文本
      */
     public static String toSlashPath(String pathText) {
         return pathText.replace('\\', '/');
     }
 
     /**
-     * 去掉字符串开头的路径分隔符
+     * 去掉字符串开头的路径分隔符（{@code /} 或 {@code \}）。
+     * <p>
+     * 常用于将绝对路径转换为相对路径，或规范化资源名称。
+     * 仅去掉第一个字符，若存在连续的分隔符前缀，只移除首个。
+     * </p>
      *
      * @param s 原始字符串
-     * @return 去掉起始 {@code /} 或 {@code \} 后的字符串；如果没有前导分隔符则返回原值
+     * @return 去掉首个路径分隔符后的字符串；若首字符不是分隔符则返回原值
      */
     public static String removeLeadingSlash(String s) {
         if (s.startsWith("/") || s.startsWith("\\")) {
