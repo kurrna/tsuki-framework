@@ -63,13 +63,13 @@ public class PropertyResolverTest {
     }
 
     @Test
-    public void requiredProperty() {
+    public void containsProperty() {
         var props = new Properties();
         props.setProperty("app.title", "Tsuki Framework");
         props.setProperty("app.version", "v1.0");
 
         var pr = new PropertyResolver(props);
-        assertThrows(NullPointerException.class, () -> pr.getRequiredProperty("not.exist"));
+        assertFalse(pr.containsProperty("not.exist"));
     }
 
     @Test
