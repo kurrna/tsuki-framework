@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 
 import com.kurna.tsuki.io.InputStreamCallback;
 
-public abstract class InputReadUtils {
+public abstract class FileReadUtils {
 
     /**
      * 从类路径中打开指定文件的输入流，并将其交给回调处理后返回结果
@@ -50,7 +50,7 @@ public abstract class InputReadUtils {
         ClassLoader clazz;
         clazz = Thread.currentThread().getContextClassLoader();
         if (clazz == null) {
-            clazz = InputReadUtils.class.getClassLoader();
+            clazz = FileReadUtils.class.getClassLoader();
         }
         return clazz;
     }

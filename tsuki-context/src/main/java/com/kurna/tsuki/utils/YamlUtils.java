@@ -43,7 +43,7 @@ public abstract class YamlUtils {
         var representer = new Representer(dumperOptions);
         var resolver = new NoImplicitResolver();
         var yaml = new Yaml(new Constructor(loaderOptions), representer, dumperOptions, loaderOptions, resolver);
-        return InputReadUtils.readInputStream(path, yaml::load);
+        return FileReadUtils.readInputStream(path, yaml::load);
     }
 
     /**
