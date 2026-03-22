@@ -6,9 +6,13 @@ import com.kurna.scan.ScanApplication;
 import com.kurna.scan.custom.annotation.CustomAnnotationBean;
 import com.kurna.scan.nested.OuterBean;
 import com.kurna.scan.nested.OuterBean.NestedBean;
+import com.kurna.scan.primary.DogBean;
 import com.kurna.scan.primary.PersonBean;
 import com.kurna.scan.primary.StudentBean;
 import com.kurna.scan.primary.TeacherBean;
+import com.kurna.scan.sub1.Sub1Bean;
+import com.kurna.scan.sub1.sub2.Sub2Bean;
+import com.kurna.scan.sub1.sub2.sub3.Sub3Bean;
 import com.kurna.tsuki.annotation.Bean;
 import com.kurna.tsuki.annotation.Component;
 import com.kurna.tsuki.annotation.ComponentScan;
@@ -19,6 +23,8 @@ import com.kurna.tsuki.exception.BeanNotOfRequiredTypeException;
 import com.kurna.tsuki.exception.NoUniqueBeanDefinitionException;
 import com.kurna.tsuki.exception.ResourceScanException;
 import com.kurna.tsuki.io.PropertyResolver;
+import com.kurna.scan.earlysingleton.EarlySingletonConfiguration;
+import com.kurna.scan.earlysingleton.EarlySingletonConsumerBean;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -41,6 +47,7 @@ public class AnnotationConfigApplicationContextTest {
     @Test
     public void testBeanDefinition() throws ResourceScanException, NoSuchMethodException {
         var ctx = createContext(ScanApplication.class);
+
         BeanDefinition def = new BeanDefinition(
             "testBean",
             TestBean.class,
@@ -62,15 +69,6 @@ public class AnnotationConfigApplicationContextTest {
         assertEquals("destroy", def.destroyMethodName);
         assertNull(def.initMethod);
         assertNull(def.destroyMethod);
-    }
-
-    @Test
-    public void testAnnotationConfigApplicationContext() throws ResourceScanException {
-        var ctx = createContext(ScanApplication.class);
-
-        // propertyResolver
-        var pp = ctx.getPropertyResolver();
-        assertEquals("Scan App", pp.getProperty("app.title"));
 
         // @CustomAnnotation
         assertNotNull(ctx.findBeanDefinition(CustomAnnotationBean.class));
@@ -96,6 +94,59 @@ public class AnnotationConfigApplicationContextTest {
         // 1 @Primary PersonBean
         BeanDefinition personPrimaryDef = ctx.findBeanDefinition(PersonBean.class);
         assertSame(teacherDef, personPrimaryDef);
+    }
+
+    // 测试创建 Bean 实例
+
+    @Test
+    public void testCustomAnnotation() throws ResourceScanException {
+        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        assertNotNull(ctx.getBean(CustomAnnotationBean.class));
+        assertNotNull(ctx.getBean("customAnnotation"));
+    }
+
+    @Test
+    public void testImport() throws ResourceScanException {
+        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        assertNotNull(ctx.getBean(LocalDateConfiguration.class));
+        assertNotNull(ctx.getBean("startLocalDate"));
+        assertNotNull(ctx.getBean("startLocalDateTime"));
+        assertNotNull(ctx.getBean(ZonedDateConfiguration.class));
+        assertNotNull(ctx.getBean("startZonedDateTime"));
+    }
+
+    @Test
+    public void testNested() throws ResourceScanException {
+        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        ctx.getBean(OuterBean.class);
+        ctx.getBean(NestedBean.class);
+    }
+
+    @Test
+    public void testPrimary() throws ResourceScanException {
+        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        var person = ctx.getBean(PersonBean.class);
+        assertEquals(TeacherBean.class, person.getClass());
+        var dog = ctx.getBean(DogBean.class);
+        assertEquals("Husky", dog.type);
+    }
+
+    @Test
+    public void testSub() throws ResourceScanException {
+        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        ctx.getBean(Sub1Bean.class);
+        ctx.getBean(Sub2Bean.class);
+        ctx.getBean(Sub3Bean.class);
+    }
+
+    @Test
+    public void testCreateBeanAsEarlySingletonLoopResolvesValueAutowiredAndOptional() throws ResourceScanException {
+        var ctx = createContext(EarlySingletonConfiguration.class);
+        var consumer = ctx.getBean("aConsumerBean", EarlySingletonConsumerBean.class);
+        assertEquals("Scan App", consumer.title);
+        assertNotNull(consumer.dependency);
+        assertEquals("dep", consumer.dependency.name);
+        assertNull(consumer.missingDependency);
     }
 
     @Test
