@@ -3,7 +3,10 @@ package com.kurna.tsuki.context;
 import com.kurna.imported.LocalDateConfiguration;
 import com.kurna.imported.ZonedDateConfiguration;
 import com.kurna.scan.ScanApplication;
+import com.kurna.scan.convert.ValueConverterBean;
 import com.kurna.scan.custom.annotation.CustomAnnotationBean;
+import com.kurna.scan.init.AnnotationInitBean;
+import com.kurna.scan.init.SpecifyInitBean;
 import com.kurna.scan.nested.OuterBean;
 import com.kurna.scan.nested.OuterBean.NestedBean;
 import com.kurna.scan.primary.DogBean;
@@ -28,6 +31,12 @@ import com.kurna.scan.earlysingleton.EarlySingletonConsumerBean;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -97,47 +106,85 @@ public class AnnotationConfigApplicationContextTest {
     }
 
     // 测试创建 Bean 实例
-
     @Test
-    public void testCustomAnnotation() throws ResourceScanException {
+    public void testBeanCreation() throws ResourceScanException {
         var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        // testCustomAnnotation
         assertNotNull(ctx.getBean(CustomAnnotationBean.class));
         assertNotNull(ctx.getBean("customAnnotation"));
-    }
-
-    @Test
-    public void testImport() throws ResourceScanException {
-        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        // testImport
         assertNotNull(ctx.getBean(LocalDateConfiguration.class));
         assertNotNull(ctx.getBean("startLocalDate"));
         assertNotNull(ctx.getBean("startLocalDateTime"));
         assertNotNull(ctx.getBean(ZonedDateConfiguration.class));
         assertNotNull(ctx.getBean("startZonedDateTime"));
-    }
-
-    @Test
-    public void testNested() throws ResourceScanException {
-        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        // testNested
         ctx.getBean(OuterBean.class);
         ctx.getBean(NestedBean.class);
-    }
-
-    @Test
-    public void testPrimary() throws ResourceScanException {
-        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        // testPrimary
         var person = ctx.getBean(PersonBean.class);
         assertEquals(TeacherBean.class, person.getClass());
         var dog = ctx.getBean(DogBean.class);
         assertEquals("Husky", dog.type);
-    }
-
-    @Test
-    public void testSub() throws ResourceScanException {
-        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        // testSub
         ctx.getBean(Sub1Bean.class);
         ctx.getBean(Sub2Bean.class);
         ctx.getBean(Sub3Bean.class);
     }
+
+    // 测试初始化 bean
+    @Test
+    public void testInitMethod() throws ResourceScanException {
+        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        // test @PostConstruct:
+        var bean1 = ctx.getBean(AnnotationInitBean.class);
+        var bean2 = ctx.getBean(SpecifyInitBean.class);
+        assertEquals("Default App Title / v1.0", bean1.appName);
+        assertEquals("Scan App / v1.0", bean2.appName);
+        assertEquals("Scan App / v1.0", bean1.specifyInitBean.appName);
+    }
+
+    @Test
+    public void testConverter() throws ResourceScanException {
+        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        var bean = ctx.getBean(ValueConverterBean.class);
+
+        assertNotNull(bean.injectedBoolean);
+        assertTrue(bean.injectedBooleanPrimitive);
+        assertTrue(bean.injectedBoolean);
+
+        assertNotNull(bean.injectedByte);
+        assertEquals((byte) 123, bean.injectedByte);
+        assertEquals((byte) 123, bean.injectedBytePrimitive);
+
+        assertNotNull(bean.injectedShort);
+        assertEquals((short) 12345, bean.injectedShort);
+        assertEquals((short) 12345, bean.injectedShortPrimitive);
+
+        assertNotNull(bean.injectedInteger);
+        assertEquals(1234567, bean.injectedInteger);
+        assertEquals(1234567, bean.injectedIntPrimitive);
+
+        assertNotNull(bean.injectedLong);
+        assertEquals(123456789_000L, bean.injectedLong);
+        assertEquals(123456789_000L, bean.injectedLongPrimitive);
+
+        assertNotNull(bean.injectedFloat);
+        assertEquals(12345.6789F, bean.injectedFloat, 0.0001F);
+        assertEquals(12345.6789F, bean.injectedFloatPrimitive, 0.0001F);
+
+        assertNotNull(bean.injectedDouble);
+        assertEquals(123456789.87654321, bean.injectedDouble, 0.0000001);
+        assertEquals(123456789.87654321, bean.injectedDoublePrimitive, 0.0000001);
+
+        assertEquals(LocalDate.parse("2023-03-29"), bean.injectedLocalDate);
+        assertEquals(LocalTime.parse("20:45:01"), bean.injectedLocalTime);
+        assertEquals(LocalDateTime.parse("2023-03-29T20:45:01"), bean.injectedLocalDateTime);
+        assertEquals(ZonedDateTime.parse("2023-03-29T20:45:01+08:00[Asia/Shanghai]"), bean.injectedZonedDateTime);
+        assertEquals(Duration.parse("P2DT3H4M"), bean.injectedDuration);
+        assertEquals(ZoneId.of("Asia/Shanghai"), bean.injectedZoneId);
+    }
+
 
     @Test
     public void testCreateBeanAsEarlySingletonLoopResolvesValueAutowiredAndOptional() throws ResourceScanException {
