@@ -12,6 +12,7 @@ import com.kurna.tsuki.annotation.Value;
 import com.kurna.tsuki.exception.BeanCreationException;
 import com.kurna.tsuki.exception.BeanDefinitionException;
 import com.kurna.tsuki.exception.BeanNotOfRequiredTypeException;
+import com.kurna.tsuki.exception.InjectionException;
 import com.kurna.tsuki.exception.NoSuchBeanDefinitionException;
 import com.kurna.tsuki.exception.NoUniqueBeanDefinitionException;
 import com.kurna.tsuki.exception.ResourceScanException;
@@ -26,8 +27,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.annotation.Annotation;
+import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
+import java.lang.reflect.Field;
+import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
@@ -52,11 +56,11 @@ import java.util.stream.Collectors;
  */
 public class AnnotationConfigApplicationContext {
 
-    private final Logger logger = LoggerFactory.getLogger(getClass());
+    protected final Logger logger = LoggerFactory.getLogger(getClass());
 
-    private final Map<String, BeanDefinition> beanDefs;
+    protected final Map<String, BeanDefinition> beanDefs;
 
-    private final PropertyResolver propertyResolver;
+    protected final PropertyResolver propertyResolver;
 
     // 当前正在创建的所有 Bean 的名称
     private final Set<String> creatingBeanNames;
@@ -64,7 +68,7 @@ public class AnnotationConfigApplicationContext {
     /**
      * 根据配置类创建应用上下文并完成 BeanDefinition 扫描与解析。
      *
-     * @param configClass 配置类（用于确定扫描包与 {@code @Import} 入口）
+     * @param configClass      配置类（用于确定扫描包与 {@code @Import} 入口）
      * @param propertyResolver 属性解析器
      * @throws ResourceScanException 当包资源扫描失败时抛出
      */
@@ -77,7 +81,7 @@ public class AnnotationConfigApplicationContext {
         // 创建 Bean 的定义
         this.beanDefs = createBeanDefinitions(beanClassNames);
 
-        // 创建 BeanName 检测循环依赖，若重复则出现循环依赖
+        // 用于检测循环依赖，若重复则出现循环依赖
         this.creatingBeanNames = new HashSet<>();
 
         // 创建 @Configuration 类型的 Bean 实例（强依赖）
@@ -88,6 +92,13 @@ public class AnnotationConfigApplicationContext {
 
         // 创建其他普通 Bean
         createNormalBeans();
+
+        // 通过字段和set方法注入依赖:
+        this.beanDefs.values().forEach(this::injectBean);
+
+        // 调用init方法:
+        this.beanDefs.values().forEach(this::initBean);
+
         if (logger.isDebugEnabled()) {
             this.beanDefs.values().stream().sorted().forEach(beanDef -> logger.debug("bean initialized: {}", beanDef));
         }
@@ -205,8 +216,8 @@ public class AnnotationConfigApplicationContext {
      * 扫描配置类中的 {@code @Bean} 工厂方法并注册为 BeanDefinition。
      *
      * @param factoryBeanName 工厂 Bean 名称
-     * @param clazz 配置类类型
-     * @param beanDefs 已收集的 BeanDefinition 映射
+     * @param clazz           配置类类型
+     * @param beanDefs        已收集的 BeanDefinition 映射
      */
     void scanFactoryMethods(String factoryBeanName, Class<?> clazz, Map<String, BeanDefinition> beanDefs) {
         for (Method method : clazz.getDeclaredMethods()) {
@@ -233,7 +244,7 @@ public class AnnotationConfigApplicationContext {
     /**
      * 校验 {@code @Bean} 方法修饰符是否合法。
      *
-     * @param clazz 声明该方法的类
+     * @param clazz  声明该方法的类
      * @param method 待校验方法
      * @throws BeanDefinitionException 当方法为 abstract/final/private 时抛出
      */
@@ -262,7 +273,7 @@ public class AnnotationConfigApplicationContext {
     /**
      * 校验 {@code @Bean} 方法返回类型是否合法。
      *
-     * @param clazz 声明该方法的类
+     * @param clazz  声明该方法的类
      * @param method 待校验方法
      * @throws BeanDefinitionException 当返回 primitive 或 void 时抛出
      */
@@ -286,7 +297,7 @@ public class AnnotationConfigApplicationContext {
      * 注册单个 BeanDefinition，并校验名称不重复。
      *
      * @param beanDefs 目标 BeanDefinition 映射
-     * @param beanDef 待注册定义
+     * @param beanDef  待注册定义
      * @throws BeanDefinitionException 当 beanName 重复时抛出
      */
     void addBeanDefinitions(Map<String, BeanDefinition> beanDefs, BeanDefinition beanDef) {
@@ -334,7 +345,7 @@ public class AnnotationConfigApplicationContext {
      * @param beanDef 待创建的 BeanDefinition
      * @return 创建完成后的 Bean 实例
      * @throws UnsatisfiedDependencyException 当检测到循环依赖时抛出
-     * @throws BeanCreationException 当缺少可用创建入口、参数无法解析或实例化失败时抛出
+     * @throws BeanCreationException          当缺少可用创建入口、参数无法解析或实例化失败时抛出
      */
     Object createBeanAsEarlySingleton(BeanDefinition beanDef) {
         logger.atDebug().log("Try create bean '{}' as early singleton: {}", beanDef.getName(), beanDef.getBeanClass().getName());
@@ -388,7 +399,7 @@ public class AnnotationConfigApplicationContext {
                 if (required && dependsOnDef == null) {
                     throw new BeanCreationException(
                         String.format("Missing autowired bean with type " +
-                            "'%s' when create bean '%s': %s.", paramType.getName(),
+                                "'%s' when create bean '%s': %s.", paramType.getName(),
                             beanDef.getName(), beanDef.getBeanClass().getName())
                     );
                 }
@@ -437,6 +448,156 @@ public class AnnotationConfigApplicationContext {
     }
 
     /**
+     * 注入依赖但不调用init方法
+     */
+    void injectBean(BeanDefinition def) {
+        try {
+            injectProperties(def, def.getBeanClass(), def.getInstance());
+        } catch (ReflectiveOperationException e) {
+            throw new BeanCreationException(e);
+        }
+    }
+
+    /**
+     * 调用init方法
+     */
+    void initBean(BeanDefinition def) {
+        // 调用init方法:
+        callMethod(def.getInstance(), def.getInitMethod(), def.getInitMethodName());
+    }
+
+    void callMethod(Object beanInstance, Method method, String namedMethod) {
+        // 调用init/destroy方法
+        if (method != null) {
+            try {
+                method.invoke(beanInstance);
+            } catch (ReflectiveOperationException e) {
+                throw new BeanCreationException(e);
+            }
+        } else if (namedMethod != null) {
+            // 查找initMethod/destroyMethod="xyz"，注意是在实际类型中查找
+            Method named = AnnotationUtils.getNamedMethod(beanInstance.getClass(), namedMethod);
+            named.setAccessible(true);
+            try {
+                named.invoke(beanInstance);
+            } catch (ReflectiveOperationException e) {
+                throw new BeanCreationException(e);
+            }
+        }
+    }
+
+    /**
+     * 注入属性
+     */
+    void injectProperties(BeanDefinition def, Class<?> clazz, Object bean) throws ReflectiveOperationException {
+        // 在当前类查找Field和Method并注入
+        for (Field f : clazz.getDeclaredFields()) {
+            tryInjectProperties(def, clazz, bean, f);
+        }
+        for (Method m : clazz.getDeclaredMethods()) {
+            tryInjectProperties(def, clazz, bean, m);
+        }
+        // 在父类查找Field和Method并注入（防止遗漏父类的依赖注入）
+        Class<?> superClazz = clazz.getSuperclass();
+        if (superClazz != null) {
+            injectProperties(def, superClazz, bean);
+        }
+    }
+
+    /**
+     * 注入单个属性
+     */
+    void tryInjectProperties(BeanDefinition def, Class<?> clazz, Object bean, AccessibleObject acc) throws ReflectiveOperationException {
+        Value value = acc.getAnnotation(Value.class);
+        Autowired autowired = acc.getAnnotation(Autowired.class);
+        if (value == null && autowired == null) {
+            return;
+        }
+
+        Field field = null;
+        Method method = null;
+        if (acc instanceof Field f) {
+            checkFieldOrMethod(f);
+            f.setAccessible(true);
+            field = f;
+        } else if (acc instanceof Method m) {
+            checkFieldOrMethod(m);
+            if (m.getParameters().length != 1) {
+                throw new BeanDefinitionException(
+                    String.format("Cannot inject a non-setter method %s for bean '%s': %s", m.getName(), def.getName(), def.getBeanClass().getName()));
+            }
+            m.setAccessible(true);
+            method = m;
+        } else {
+            throw new InjectionException(
+                String.format("Unsupported injection target: %s for bean '%s': %s", acc, def.getName(), def.getBeanClass().getName())
+            );
+        }
+
+        String accessibleName = field != null ? field.getName() : method.getName();
+        Class<?> accessibleType = field != null ? field.getType() : method.getParameterTypes()[0];
+
+        if (value != null && autowired != null) {
+            throw new BeanCreationException(String.format("Cannot specify both @Autowired and @Value when inject %s.%s for bean '%s': %s",
+                clazz.getSimpleName(), accessibleName, def.getName(), def.getBeanClass().getName()));
+        }
+
+        // @Value注入:
+        if (value != null) {
+            Object propValue = this.propertyResolver.getProperty(value.value(), accessibleType);
+            // 字段：注入值
+            if (field != null) {
+                logger.atDebug().log("Field value injection: {}.{} = {}", def.getBeanClass().getName(), accessibleName, propValue);
+                field.set(bean, propValue);
+            }
+            // 方法：传入参数
+            if (method != null) {
+                logger.atDebug().log("Method value injection: {}.{} ({})", def.getBeanClass().getName(), accessibleName, propValue);
+                method.invoke(bean, propValue);
+            }
+        }
+
+        // @Autowired注入:
+        if (autowired != null) {
+            String name = autowired.name();
+            boolean required = autowired.value();
+            Object depends = name.isEmpty() ? findBean(accessibleType) : findBean(name, accessibleType);
+            if (required && depends == null) {
+                throw new UnsatisfiedDependencyException(
+                    String.format("Dependency bean not found when inject %s.%s for bean '%s': %s",
+                        clazz.getSimpleName(), accessibleName, def.getName(), def.getBeanClass().getName())
+                );
+            }
+            if (depends != null) {
+                if (field != null) {
+                    logger.atDebug().log("Field autowired injection: {}.{} = {}", def.getBeanClass().getName(), accessibleName, depends);
+                    field.set(bean, depends);
+                }
+                if (method != null) {
+                    logger.atDebug().log("Method autowired injection: {}.{} ({})", def.getBeanClass().getName(), accessibleName, depends);
+                    method.invoke(bean, depends);
+                }
+            }
+        }
+    }
+
+    void checkFieldOrMethod(Member m) {
+        int mod = m.getModifiers();
+        if (Modifier.isStatic(mod)) {
+            throw new BeanDefinitionException("Cannot inject static field: " + m);
+        }
+        if (Modifier.isFinal(mod)) {
+            if (m instanceof Field field) {
+                throw new BeanDefinitionException("Cannot inject final field: " + field);
+            }
+            if (m instanceof Method) {
+                logger.warn(
+                    "Inject final method should be careful because it is not called on target bean when bean is proxied and may cause NullPointerException.");
+            }
+        }
+    }
+
+    /**
      * 按类型查找所有匹配的 BeanDefinition，并按顺序排序返回。
      *
      * @param type 目标类型
@@ -464,7 +625,7 @@ public class AnnotationConfigApplicationContext {
     /**
      * 按名称查找 BeanDefinition，并校验其是否可赋值给指定类型。
      *
-     * @param name Bean 标识名
+     * @param name         Bean 标识名
      * @param requiredType 期望类型
      * @return 对应 BeanDefinition；若名称不存在则返回 {@code null}
      * @throws BeanNotOfRequiredTypeException 当名称存在但类型不匹配时抛出
@@ -539,7 +700,7 @@ public class AnnotationConfigApplicationContext {
      * 按名称获取 Bean。
      *
      * @param name Bean 名称
-     * @param <T> 返回值泛型
+     * @param <T>  返回值泛型
      * @return 对应名称的 Bean 实例
      * @throws NoSuchBeanDefinitionException 当 name 不存在时抛出
      */
@@ -555,11 +716,11 @@ public class AnnotationConfigApplicationContext {
     /**
      * 按名称与类型获取 Bean。
      *
-     * @param name Bean 名称
+     * @param name         Bean 名称
      * @param requiredType 期望类型
-     * @param <T> 返回值泛型
+     * @param <T>          返回值泛型
      * @return 匹配名称与类型的 Bean 实例
-     * @throws NoSuchBeanDefinitionException 当 name 不存在时抛出
+     * @throws NoSuchBeanDefinitionException  当 name 不存在时抛出
      * @throws BeanNotOfRequiredTypeException 当 name 存在但类型不匹配时抛出
      */
     public <T> T getBean(String name, Class<T> requiredType) {
@@ -574,7 +735,7 @@ public class AnnotationConfigApplicationContext {
      * 按类型获取所有 Bean。
      *
      * @param requiredType 目标类型
-     * @param <T> 返回值泛型
+     * @param <T>          返回值泛型
      * @return 所有匹配 Bean 的实例列表；若不存在则返回空列表
      */
     @SuppressWarnings("unchecked")
@@ -594,9 +755,9 @@ public class AnnotationConfigApplicationContext {
      * 按类型获取单个 Bean。
      *
      * @param requiredType 目标类型
-     * @param <T> 返回值泛型
+     * @param <T>          返回值泛型
      * @return 匹配类型的唯一 Bean（或 {@code @Primary} Bean）
-     * @throws NoSuchBeanDefinitionException 当不存在匹配类型的 Bean 时抛出
+     * @throws NoSuchBeanDefinitionException   当不存在匹配类型的 Bean 时抛出
      * @throws NoUniqueBeanDefinitionException 当存在多个候选且无法确定唯一 Bean 时抛出
      */
     @SuppressWarnings("unchecked")
@@ -621,9 +782,9 @@ public class AnnotationConfigApplicationContext {
     /**
      * 按名称与类型查找 Bean；未找到时返回 {@code null}。
      *
-     * @param name Bean 名称
+     * @param name         Bean 名称
      * @param requiredType 期望类型
-     * @param <T> 返回值泛型
+     * @param <T>          返回值泛型
      * @return 匹配实例；若不存在返回 {@code null}
      * @throws BeanNotOfRequiredTypeException 当名称存在但类型不匹配时抛出
      */
@@ -641,7 +802,7 @@ public class AnnotationConfigApplicationContext {
      * 按类型查找单个 Bean；未找到时返回 {@code null}。
      *
      * @param requiredType 目标类型
-     * @param <T> 返回值泛型
+     * @param <T>          返回值泛型
      * @return 匹配实例；若不存在返回 {@code null}
      * @throws NoUniqueBeanDefinitionException 当存在多个候选且无法确定唯一 Bean 时抛出
      */
@@ -659,7 +820,7 @@ public class AnnotationConfigApplicationContext {
      * 按类型查找所有 Bean；未找到时返回空列表。
      *
      * @param requiredType 目标类型
-     * @param <T> 返回值泛型
+     * @param <T>          返回值泛型
      * @return 匹配实例列表
      */
     @Nullable
