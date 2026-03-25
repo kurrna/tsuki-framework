@@ -13,6 +13,10 @@ import com.kurna.scan.primary.DogBean;
 import com.kurna.scan.primary.PersonBean;
 import com.kurna.scan.primary.StudentBean;
 import com.kurna.scan.primary.TeacherBean;
+import com.kurna.scan.proxy.InjectProxyOnConstructorBean;
+import com.kurna.scan.proxy.InjectProxyOnPropertyBean;
+import com.kurna.scan.proxy.OriginBean;
+import com.kurna.scan.proxy.SecondProxyBean;
 import com.kurna.scan.sub1.Sub1Bean;
 import com.kurna.scan.sub1.sub2.Sub2Bean;
 import com.kurna.scan.sub1.sub2.sub3.Sub3Bean;
@@ -53,6 +57,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class AnnotationConfigApplicationContextTest {
 
+    // 测试 BeanPostProcessor
+    @Test
+    public void testProxy() throws ResourceScanException {
+        var ctx = new AnnotationConfigApplicationContext(ScanApplication.class, createPropertyResolver());
+        // test proxy:
+        OriginBean proxy = ctx.getBean(OriginBean.class);
+        assertSame(SecondProxyBean.class, proxy.getClass());
+        assertEquals("Scan App", proxy.getName());
+        assertEquals("v1.0", proxy.getVersion());
+        // make sure proxy.field is not injected:
+        assertNull(proxy.name);
+        assertNull(proxy.version);
+
+        // other beans are injected proxy instance:
+        var inject1 = ctx.getBean(InjectProxyOnPropertyBean.class);
+        var inject2 = ctx.getBean(InjectProxyOnConstructorBean.class);
+        assertSame(proxy, inject1.injected);
+        assertSame(proxy, inject2.injected);
+    }
+
+    // 测试 BeanDefinition 的创建和属性
     @Test
     public void testBeanDefinition() throws ResourceScanException, NoSuchMethodException {
         var ctx = createContext(ScanApplication.class);
