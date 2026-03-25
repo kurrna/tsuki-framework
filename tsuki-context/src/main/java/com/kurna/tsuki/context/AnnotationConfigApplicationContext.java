@@ -20,6 +20,7 @@ import com.kurna.tsuki.exception.UnsatisfiedDependencyException;
 import com.kurna.tsuki.io.PropertyResolver;
 import com.kurna.tsuki.io.ResourceResolver;
 import com.kurna.tsuki.utils.AnnotationUtils;
+import com.kurna.tsuki.utils.ApplicationContextUtils;
 import jakarta.annotation.Nullable;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -55,7 +56,7 @@ import java.util.stream.Collectors;
  * </ul>
  * </p>
  */
-public class AnnotationConfigApplicationContext {
+public class AnnotationConfigApplicationContext implements ConfigurableApplicationContext {
 
     protected final Logger logger = LoggerFactory.getLogger(getClass());
 
@@ -77,6 +78,8 @@ public class AnnotationConfigApplicationContext {
      */
     public AnnotationConfigApplicationContext(Class<?> configClass, PropertyResolver propertyResolver)
         throws ResourceScanException {
+        ApplicationContextUtils.setApplicationContext(this);
+
         this.propertyResolver = propertyResolver;
         // 扫描获取所有的 Bean 的 Class
         final Set<String> beanClassNames = scanForBeanClassNames(configClass);
@@ -361,7 +364,8 @@ public class AnnotationConfigApplicationContext {
      * @throws UnsatisfiedDependencyException 当检测到循环依赖时抛出
      * @throws BeanCreationException          当缺少可用创建入口、参数无法解析或实例化失败时抛出
      */
-    Object createBeanAsEarlySingleton(BeanDefinition beanDef) {
+    @Override
+    public Object createBeanAsEarlySingleton(BeanDefinition beanDef) {
         logger.atDebug().log("Try create bean '{}' as early singleton: {}", beanDef.getName(), beanDef.getBeanClass().getName());
         if (!this.creatingBeanNames.add(beanDef.getName())) {
             // 重复创建 Bean 导致的循环依赖
@@ -656,13 +660,26 @@ public class AnnotationConfigApplicationContext {
         }
     }
 
+    @Override
+    public void close() {
+        logger.info("Closing {}...", this.getClass().getName());
+        this.beanDefs.values().forEach(beanDef -> {
+            final Object beanInstance = getProxiedInstance(beanDef);
+            callMethod(beanInstance, beanDef.getDestroyMethod(), beanDef.getDestroyMethodName());
+        });
+        this.beanDefs.clear();
+        logger.info("{} closed.", this.getClass().getName());
+        ApplicationContextUtils.setApplicationContext(null);
+    }
+
     /**
      * 按类型查找所有匹配的 BeanDefinition，并按顺序排序返回。
      *
      * @param type 目标类型
-     * @return 匹配的 BeanDefinition 列表（可能为空）
+     * @return 匹配的 BeanDefinition 列表（可能为空）F
      */
-    List<BeanDefinition> findBeanDefinitions(Class<?> type) {
+    @Override
+    public List<BeanDefinition> findBeanDefinitions(Class<?> type) {
         return this.beanDefs.values().stream()
             // 按类型过滤
             .filter(def -> type.isAssignableFrom(def.getBeanClass()))
@@ -677,7 +694,8 @@ public class AnnotationConfigApplicationContext {
      * @return 对应 BeanDefinition，不存在则返回 {@code null}
      */
     @Nullable
-    BeanDefinition findBeanDefinition(String name) {
+    @Override
+    public BeanDefinition findBeanDefinition(String name) {
         return this.beanDefs.get(name);
     }
 
@@ -690,7 +708,8 @@ public class AnnotationConfigApplicationContext {
      * @throws BeanNotOfRequiredTypeException 当名称存在但类型不匹配时抛出
      */
     @Nullable
-    BeanDefinition findBeanDefinition(String name, Class<?> requiredType) {
+    @Override
+    public BeanDefinition findBeanDefinition(String name, Class<?> requiredType) {
         BeanDefinition def = findBeanDefinition(name);
         if (def == null) {
             return null;
@@ -710,7 +729,8 @@ public class AnnotationConfigApplicationContext {
      * @throws NoUniqueBeanDefinitionException 当存在多个候选且无法确定唯一 Bean 时抛出
      */
     @Nullable
-    BeanDefinition findBeanDefinition(Class<?> type) {
+    @Override
+    public BeanDefinition findBeanDefinition(Class<?> type) {
         List<BeanDefinition> beanDefs = findBeanDefinitions(type);
         if (beanDefs.isEmpty()) {
             return null;
@@ -790,6 +810,7 @@ public class AnnotationConfigApplicationContext {
         // 因为创建代理 Bean 时正向遍历 List，所以通过原 Bean 获取代理后的 Bean 时应该反向 List
         List<BeanPostProcessor> reversedBeanPostProcessors = new ArrayList<>(this.beanPostProcessors);
         Collections.reverse(reversedBeanPostProcessors);
+        // 用于在注入阶段获取原始 Bean 实例（如果被代理了）以正确注入到其他 Bean 中
         for (BeanPostProcessor beanPostProcessor : reversedBeanPostProcessors) {
             Object restoredInstance = beanPostProcessor.postProcessOnSetProperty(beanInstance, beanDef.getName());
             if (restoredInstance != beanInstance) {
@@ -834,6 +855,7 @@ public class AnnotationConfigApplicationContext {
      * @throws NoSuchBeanDefinitionException 当 name 不存在时抛出
      */
     @SuppressWarnings("unchecked")
+    @Override
     public <T> T getBean(String name) {
         BeanDefinition def = this.beanDefs.get(name);
         if (def == null) {
@@ -852,6 +874,7 @@ public class AnnotationConfigApplicationContext {
      * @throws NoSuchBeanDefinitionException  当 name 不存在时抛出
      * @throws BeanNotOfRequiredTypeException 当 name 存在但类型不匹配时抛出
      */
+    @Override
     public <T> T getBean(String name, Class<T> requiredType) {
         T t = findBean(name, requiredType);
         if (t == null) {
@@ -868,6 +891,7 @@ public class AnnotationConfigApplicationContext {
      * @return 所有匹配 Bean 的实例列表；若不存在则返回空列表
      */
     @SuppressWarnings("unchecked")
+    @Override
     public <T> List<T> getBeans(Class<T> requiredType) {
         List<BeanDefinition> defs = findBeanDefinitions(requiredType);
         if (defs.isEmpty()) {
@@ -890,6 +914,7 @@ public class AnnotationConfigApplicationContext {
      * @throws NoUniqueBeanDefinitionException 当存在多个候选且无法确定唯一 Bean 时抛出
      */
     @SuppressWarnings("unchecked")
+    @Override
     public <T> T getBean(Class<T> requiredType) {
         BeanDefinition def = findBeanDefinition(requiredType);
         if (def == null) {
