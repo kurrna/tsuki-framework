@@ -36,6 +36,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -65,6 +66,8 @@ public class AnnotationConfigApplicationContext {
     // 当前正在创建的所有 Bean 的名称
     private final Set<String> creatingBeanNames;
 
+    private final List<BeanPostProcessor> beanPostProcessors = new ArrayList<>();
+
     /**
      * 根据配置类创建应用上下文并完成 BeanDefinition 扫描与解析。
      *
@@ -89,6 +92,14 @@ public class AnnotationConfigApplicationContext {
             .filter(beanDef ->
                 AnnotationUtils.findAnnotation(beanDef.getBeanClass(), Configuration.class) != null)
             .forEach(this::createBeanAsEarlySingleton);
+
+        // 创建BeanPostProcessor类型的Bean:
+        List<BeanPostProcessor> processors = this.beanDefs.values().stream()
+            // 过滤出BeanPostProcessor:
+            .filter(beanDef -> BeanPostProcessor.class.isAssignableFrom(beanDef.getBeanClass()))
+            .sorted()
+            .map(beanDef -> (BeanPostProcessor) createBeanAsEarlySingleton(beanDef)).toList();
+        this.beanPostProcessors.addAll(processors);
 
         // 创建其他普通 Bean
         createNormalBeans();
@@ -180,6 +191,9 @@ public class AnnotationConfigApplicationContext {
                 // 查找是否有 @Configuration，视作 Bean 的工厂
                 Configuration configuration = AnnotationUtils.findAnnotation(clazz, Configuration.class);
                 if (configuration != null) {
+                    if (BeanPostProcessor.class.isAssignableFrom(clazz)) {
+                        throw new BeanDefinitionException("@Configuration class '" + clazz.getName() + "' cannot be BeanPostProcessor.");
+                    }
                     scanFactoryMethods(beanName, clazz, beanDefs);
                 }
             }
@@ -373,6 +387,7 @@ public class AnnotationConfigApplicationContext {
             Annotation[] paramAnnotations = paramsAnnotations[i];
             Value value = AnnotationUtils.getAnnotation(paramAnnotations, Value.class);
             Autowired autowired = AnnotationUtils.getAnnotation(paramAnnotations, Autowired.class);
+
             // @Configuration 类型的 Bean 是工厂，不允许使用 @Autowired 创建
             final boolean isConfiguration =
                 AnnotationUtils.findAnnotation(beanDef.getBeanClass(), Configuration.class) != null;
@@ -381,11 +396,25 @@ public class AnnotationConfigApplicationContext {
                     String.format("Cannot specify @Autowired when create @Configuration bean '%s': %s.", beanDef.getName(), beanDef.getBeanClass().getName())
                 );
             }
+
+            // BeanPostProcessor不能依赖其他Bean，不允许使用@Autowired创建:
+            final boolean isBeanPostProcessor = BeanPostProcessor.class.isAssignableFrom(beanDef.getBeanClass());
+            if (isBeanPostProcessor && autowired != null) {
+                throw new BeanCreationException(
+                    String.format("Cannot specify @Autowired when create BeanPostProcessor '%s': %s.", beanDef.getName(), beanDef.getBeanClass().getName()));
+            }
+
+            // 参数需要@Value或@Autowired两者之一:
+            if (value != null && autowired != null) {
+                throw new BeanCreationException(
+                    String.format("Cannot specify both @Autowired and @Value when create bean '%s': %s.", beanDef.getName(), beanDef.getBeanClass().getName()));
+            }
             if (value == null && autowired == null) {
                 throw new BeanCreationException(
                     String.format("Must specify @Autowired or @Value when create bean '%s': %s.", beanDef.getName(), beanDef.getBeanClass().getName())
                 );
             }
+
             Class<?> paramType = param.getType();
             if (value != null) {
                 // 参数是 @Value
@@ -406,7 +435,10 @@ public class AnnotationConfigApplicationContext {
                 if (dependsOnDef != null) {
                     // 获取依赖的 Bean
                     Object autowiredBeanInstance = dependsOnDef.getInstance();
-                    if (autowiredBeanInstance == null) {
+                    if (autowiredBeanInstance == null
+                        // && !isConfiguration 始终为 true
+                        // && !isBeanPostProcessor 始终为 true
+                    ) {
                         // 当前依赖 Bean 尚未初始化，递归调用初始化该依赖 Bean
                         autowiredBeanInstance = createBeanAsEarlySingleton(dependsOnDef);
                     }
@@ -444,15 +476,30 @@ public class AnnotationConfigApplicationContext {
             }
         }
         beanDef.setInstance(instance);
+
+        // 调用BeanPostProcessor处理Bean:
+        for (BeanPostProcessor processor : beanPostProcessors) {
+            Object processed = processor.postProcessBeforeInitialization(beanDef.getInstance(), beanDef.getName());
+            if (processed == null) {
+                throw new BeanCreationException(String.format("PostBeanProcessor returns null when process bean '%s' by %s", beanDef.getName(), processor));
+            }
+            // 如果一个BeanPostProcessor替换了原始Bean，则更新Bean的引用:
+            if (beanDef.getInstance() != processed) {
+                logger.atDebug().log("Bean '{}' was replaced by post processor {}.", beanDef.getName(), processor.getClass().getName());
+                beanDef.setInstance(processed);
+            }
+        }
+
         return beanDef.getInstance();
     }
 
     /**
      * 注入依赖但不调用init方法
      */
-    void injectBean(BeanDefinition def) {
+    void injectBean(BeanDefinition beanDef) {
+        Object beanInstance = getProxiedInstance(beanDef);
         try {
-            injectProperties(def, def.getBeanClass(), def.getInstance());
+            injectProperties(beanDef, beanDef.getBeanClass(), beanInstance);
         } catch (ReflectiveOperationException e) {
             throw new BeanCreationException(e);
         }
@@ -461,9 +508,21 @@ public class AnnotationConfigApplicationContext {
     /**
      * 调用init方法
      */
-    void initBean(BeanDefinition def) {
+    void initBean(BeanDefinition beanDef) {
+        Object beanInstance = getProxiedInstance(beanDef);
         // 调用init方法:
-        callMethod(def.getInstance(), def.getInitMethod(), def.getInitMethodName());
+        callMethod(beanInstance, beanDef.getInitMethod(), beanDef.getInitMethodName());
+        // 调用 BeanPostProcessor.postProcessAfterInitialization
+        beanPostProcessors.forEach(beanPostProcessor -> {
+            Object processedInstance = beanPostProcessor.postProcessAfterInitialization(beanDef.getInstance(), beanDef.getName());
+            if (processedInstance != beanDef.getInstance()) {
+                if (beanDef.getInstance() != null) {
+                    logger.atDebug().log("BeanPostProcessor {} return different bean from {} to {}",
+                        beanPostProcessor.getClass().getSimpleName(), beanDef.getInstance().getClass().getSimpleName(), processedInstance.getClass().getSimpleName());
+                }
+                beanDef.setInstance(processedInstance);
+            }
+        });
     }
 
     void callMethod(Object beanInstance, Method method, String namedMethod) {
@@ -674,6 +733,76 @@ public class AnnotationConfigApplicationContext {
         }
     }
 
+
+    /**
+     * 按名称与类型查找 Bean；未找到时返回 {@code null}。
+     *
+     * @param name         Bean 名称
+     * @param requiredType 期望类型
+     * @param <T>          返回值泛型
+     * @return 匹配实例；若不存在返回 {@code null}
+     * @throws BeanNotOfRequiredTypeException 当名称存在但类型不匹配时抛出
+     */
+    @Nullable
+    @SuppressWarnings("unchecked")
+    protected <T> T findBean(String name, Class<T> requiredType) {
+        BeanDefinition def = findBeanDefinition(name, requiredType);
+        if (def == null) {
+            return null;
+        }
+        return (T) def.getRequiredInstance();
+    }
+
+    /**
+     * 按类型查找单个 Bean；未找到时返回 {@code null}。
+     *
+     * @param requiredType 目标类型
+     * @param <T>          返回值泛型
+     * @return 匹配实例；若不存在返回 {@code null}
+     * @throws NoUniqueBeanDefinitionException 当存在多个候选且无法确定唯一 Bean 时抛出
+     */
+    @Nullable
+    @SuppressWarnings("unchecked")
+    protected <T> T findBean(Class<T> requiredType) {
+        BeanDefinition def = findBeanDefinition(requiredType);
+        if (def == null) {
+            return null;
+        }
+        return (T) def.getRequiredInstance();
+    }
+
+    /**
+     * 按类型查找所有 Bean；未找到时返回空列表。
+     *
+     * @param requiredType 目标类型
+     * @param <T>          返回值泛型
+     * @return 匹配实例列表
+     */
+    @Nullable
+    @SuppressWarnings("unchecked")
+    protected <T> List<T> findBeans(Class<T> requiredType) {
+        return findBeanDefinitions(requiredType).stream().map(def -> (T) def.getRequiredInstance()).collect(Collectors.toList());
+    }
+
+    private Object getProxiedInstance(BeanDefinition beanDef) {
+        Object beanInstance = beanDef.getInstance();
+        // 如果 Proxy 改变了原始 Bean，则由 BPP 指定原始 Bean
+        // 因为创建代理 Bean 时正向遍历 List，所以通过原 Bean 获取代理后的 Bean 时应该反向 List
+        List<BeanPostProcessor> reversedBeanPostProcessors = new ArrayList<>(this.beanPostProcessors);
+        Collections.reverse(reversedBeanPostProcessors);
+        for (BeanPostProcessor beanPostProcessor : reversedBeanPostProcessors) {
+            Object restoredInstance = beanPostProcessor.postProcessOnSetProperty(beanInstance, beanDef.getName());
+            if (restoredInstance != beanInstance) {
+                if (beanInstance != null) {
+                    logger.atDebug().log("BeanPostProcessor {} specified injection from {} to {}.",
+                        beanPostProcessor.getClass().getSimpleName(), beanInstance.getClass().getSimpleName(), restoredInstance.getClass().getSimpleName());
+                }
+                beanInstance = restoredInstance;
+            }
+        }
+        return beanInstance;
+    }
+
     /**
      * 获取类级别的排序值。
      *
@@ -778,55 +907,4 @@ public class AnnotationConfigApplicationContext {
     public boolean containsBean(String name) {
         return this.beanDefs.containsKey(name);
     }
-
-    /**
-     * 按名称与类型查找 Bean；未找到时返回 {@code null}。
-     *
-     * @param name         Bean 名称
-     * @param requiredType 期望类型
-     * @param <T>          返回值泛型
-     * @return 匹配实例；若不存在返回 {@code null}
-     * @throws BeanNotOfRequiredTypeException 当名称存在但类型不匹配时抛出
-     */
-    @Nullable
-    @SuppressWarnings("unchecked")
-    protected <T> T findBean(String name, Class<T> requiredType) {
-        BeanDefinition def = findBeanDefinition(name, requiredType);
-        if (def == null) {
-            return null;
-        }
-        return (T) def.getRequiredInstance();
-    }
-
-    /**
-     * 按类型查找单个 Bean；未找到时返回 {@code null}。
-     *
-     * @param requiredType 目标类型
-     * @param <T>          返回值泛型
-     * @return 匹配实例；若不存在返回 {@code null}
-     * @throws NoUniqueBeanDefinitionException 当存在多个候选且无法确定唯一 Bean 时抛出
-     */
-    @Nullable
-    @SuppressWarnings("unchecked")
-    protected <T> T findBean(Class<T> requiredType) {
-        BeanDefinition def = findBeanDefinition(requiredType);
-        if (def == null) {
-            return null;
-        }
-        return (T) def.getRequiredInstance();
-    }
-
-    /**
-     * 按类型查找所有 Bean；未找到时返回空列表。
-     *
-     * @param requiredType 目标类型
-     * @param <T>          返回值泛型
-     * @return 匹配实例列表
-     */
-    @Nullable
-    @SuppressWarnings("unchecked")
-    protected <T> List<T> findBeans(Class<T> requiredType) {
-        return findBeanDefinitions(requiredType).stream().map(def -> (T) def.getRequiredInstance()).collect(Collectors.toList());
-    }
-
 }
