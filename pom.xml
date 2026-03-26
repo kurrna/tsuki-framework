@@ -10,6 +10,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>tsuki-context</module>
+        <module>tsuki-aop</module>
     </modules>
 
     <properties>
